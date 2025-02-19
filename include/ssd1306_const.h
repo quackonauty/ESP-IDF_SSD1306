@@ -52,7 +52,7 @@
 #define OLED_CMD_NO_OPERATION 0xE3 // NO OPERATION COMMAND
 
 /*  FONT DEFINED FROM ASCII 32 -> 127 */
-static uint8_t font8x8[256][8] = {
+static const uint8_t font8x8[256][8] = {
     /*  ASCII CONTROL CHARACTERS */
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // 000 -> 0x00 [NULL]
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // 001 -> 0x01 [SOH]

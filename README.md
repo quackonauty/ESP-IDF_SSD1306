@@ -35,13 +35,18 @@ Follow the steps below to seamlessly integrate this component into your ESP-IDF 
 
 ### 2. Adding the Component as a Dependency
 
-To integrate the component into your project, you must include it as a dependency in the idf_component.yml file, which is typically located in the project's main directory. If this file does not exist, simply create a new one with that name and add the component dependency as shown below:
+To integrate the component into your project, you must execute de following lines in the project terminal:
+```bash
+idf.py add-dependency --git https://github.com/quackonauty/ESP-IDF_SSD1306.git --git-ref lastest quackonauty/ssd1306
+```
+Or include it as a dependency in the idf_component.yml file, which is typically located in the project's main directory. If this file does not exist, simply create a new one with that name and add the component dependency as shown below:
 
 ```yaml
 # idf_component.yml
 dependencies:
   quackonauty/ssd1306:
     git: https://github.com/quackonauty/ESP-IDF_SSD1306.git
+    version: lastest
 ```
 
 ## III. Component Workflow and Usage

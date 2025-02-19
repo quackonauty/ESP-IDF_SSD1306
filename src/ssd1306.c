@@ -55,7 +55,7 @@ esp_err_t i2c_ssd1306_init(i2c_master_bus_handle_t i2c_master_bus, i2c_ssd1306_c
         OLED_CMD_NORMAL_DISPLAY,
         OLED_CMD_SET_CHARGE_PUMP, 0x14,
         OLED_CMD_DISPLAY_ON};
-    if (i2c_ssd1306_config.wise ==  SSD1306_BOTTOM_TO_TOP)
+    if (i2c_ssd1306_config.wise == SSD1306_BOTTOM_TO_TOP)
     {
         ssd1306_init_cmd[7] = OLED_CMD_COM_SCAN_DIRECTION_REMAP;
         ssd1306_init_cmd[8] = OLED_CMD_SEGMENT_REMAP_RIGHT_TO_LEFT;
@@ -84,6 +84,25 @@ esp_err_t i2c_ssd1306_init(i2c_master_bus_handle_t i2c_master_bus, i2c_ssd1306_c
             return ESP_ERR_NO_MEM;
     }
     ESP_LOGI(SSD1306_TAG, "I2C SSD1306 initialized successfully");
+
+    return ret;
+}
+
+esp_err_t i2c_ssd1306_deinit(i2c_ssd1306_handle_t *i2c_ssd1306)
+{
+    ESP_LOGI(SSD1306_TAG, "Deinitializing I2C SSD1306...");
+    for (uint8_t i = 0; i < i2c_ssd1306->total_pages; i++)
+    {
+        free(i2c_ssd1306->page[i].segment);
+    }
+    free(i2c_ssd1306->page);
+    esp_err_t ret = i2c_master_bus_rm_device(i2c_ssd1306->i2c_master_dev);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(SSD1306_TAG, "Failed to remove I2C SSD1306 device");
+        return ret;
+    }
+    ESP_LOGI(SSD1306_TAG, "I2C SSD1306 deinitialized successfully");
 
     return ret;
 }
@@ -129,11 +148,16 @@ esp_err_t i2c_ssd1306_buffer_fill_pixel(i2c_ssd1306_handle_t *i2c_ssd1306, uint8
         ESP_LOGE(SSD1306_TAG, "Invalid pixel coordinates, 'x' must be between 0 and %d, 'y' must be between 0 and %d", i2c_ssd1306->width - 1, i2c_ssd1306->height - 1);
         return ESP_ERR_INVALID_ARG;
     }
-
+    uint8_t page = y / 8;
+    uint8_t bit = 1 << (y % 8);
     if (fill)
-        i2c_ssd1306->page[y / 8].segment[x] |= (1 << (y % 8));
+    {
+        i2c_ssd1306->page[page].segment[x] |= bit;
+    }
     else
-        i2c_ssd1306->page[y / 8].segment[x] &= ~(1 << (y % 8));
+    {
+        i2c_ssd1306->page[page].segment[x] &= ~bit;
+    }
 
     return ESP_OK;
 }
@@ -146,14 +170,37 @@ esp_err_t i2c_ssd1306_buffer_fill_space(i2c_ssd1306_handle_t *i2c_ssd1306, uint8
         return ESP_ERR_INVALID_ARG;
     }
 
-    for (uint8_t i = y1; i <= y2; i++)
+    uint8_t start_page = y1 / 8;
+    uint8_t end_page = y2 / 8;
+    uint8_t mask;
+    uint8_t offset_start = y1 % 8;
+    uint8_t offset_end = y2 % 8;
+
+    for (uint8_t page = start_page; page <= end_page; page++)
     {
+        if (start_page == end_page)
+        {
+            mask = (0xFF << offset_start) & (0xFF >> (7 - offset_end));
+        }
+        else if (page == start_page)
+        {
+            mask = 0xFF << offset_start;
+        }
+        else if (page == end_page)
+        {
+            mask = 0xFF >> (7 - offset_end);
+        }
+        else
+        {
+            mask = 0xFF;
+        }
+
         for (uint8_t j = x1; j <= x2; j++)
         {
             if (fill)
-                i2c_ssd1306->page[i / 8].segment[j] |= (1 << (i % 8));
+                i2c_ssd1306->page[page].segment[j] |= mask;
             else
-                i2c_ssd1306->page[i / 8].segment[j] &= ~(1 << (i % 8));
+                i2c_ssd1306->page[page].segment[j] &= ~mask;
         }
     }
 
@@ -162,65 +209,61 @@ esp_err_t i2c_ssd1306_buffer_fill_space(i2c_ssd1306_handle_t *i2c_ssd1306, uint8
 
 esp_err_t i2c_ssd1306_buffer_text(i2c_ssd1306_handle_t *i2c_ssd1306, uint8_t x, uint8_t y, const char *text, bool invert)
 {
-    if (x >= i2c_ssd1306->width || y >= i2c_ssd1306->height)
+    if (x >= i2c_ssd1306->width || y >= i2c_ssd1306->height || !text || strlen(text) == 0)
     {
-        ESP_LOGE(SSD1306_TAG, "Invalid text coordinates, 'x' must be between 0 and %d, 'y' must be between 0 and %d", i2c_ssd1306->width - 1, i2c_ssd1306->height - 1);
+        ESP_LOGE(SSD1306_TAG, "Invalid text or coordinates: x=%d (max %d), y=%d (max %d)", x, i2c_ssd1306->width - 1, y, i2c_ssd1306->height - 1);
         return ESP_ERR_INVALID_ARG;
     }
 
     uint8_t len = strlen(text);
     uint8_t page = y / 8;
-    uint8_t y_offset = y % 8;
-    if (y_offset == 0)
-    {
-        for (uint8_t i = 0; i < len; i++)
-        {
-            if (x + 8 > i2c_ssd1306->width)
-            {
-                ESP_LOGW(SSD1306_TAG, "Text exceeds the width of the display");
-                return ESP_OK;
-            }
+    uint8_t offset = y % 8;
+    bool has_next_page = (page + 1) < i2c_ssd1306->total_pages;
 
-            for (uint8_t j = 0; j < 8; j++)
-            {
-                if (invert)
-                    i2c_ssd1306->page[page].segment[x + j] = ~font8x8[(uint8_t)text[i]][j];
-                else
-                    i2c_ssd1306->page[page].segment[x + j] = font8x8[(uint8_t)text[i]][j];
-            }
-            x += 8;
-        }
+    uint8_t max_chars = (i2c_ssd1306->width - x) / 8;
+    if (len > max_chars)
+    {
+        ESP_LOGW(SSD1306_TAG, "Text truncated: text columns exceed display width, lost %d columns", x + (len * 8) - i2c_ssd1306->width);
     }
-    else
+
+    if (offset != 0 && !has_next_page)
     {
-        if (page + 1 >= i2c_ssd1306->total_pages)
+        ESP_LOGW(SSD1306_TAG, "Vertical truncation: text exceeds display height, lost %d rows", offset);
+    }
+
+    for (uint8_t i = 0; i < len && x < i2c_ssd1306->width; i++)
+    {
+        const uint8_t *char_data = font8x8[(uint8_t)text[i]];
+        uint8_t available_columns = i2c_ssd1306->width - x;
+        uint8_t columns_to_draw = (available_columns < 8) ? available_columns : 8;
+
+        for (uint8_t j = 0; j < columns_to_draw; j++)
         {
-            ESP_LOGW(SSD1306_TAG, "Text exceeds the height of the display");
-            return ESP_OK;
+            uint8_t char_col = char_data[j];
+
+            if (invert)
+            {
+                char_col = ~char_col;
+            }
+
+            if (offset == 0)
+            {
+                i2c_ssd1306->page[page].segment[x + j] |= char_col;
+            }
+            else
+            {
+                uint8_t lower_part = char_col << offset;
+                uint8_t upper_part = char_col >> (8 - offset);
+
+                i2c_ssd1306->page[page].segment[x + j] |= lower_part;
+                if (has_next_page)
+                {
+                    i2c_ssd1306->page[page + 1].segment[x + j] |= upper_part;
+                }
+            }
         }
 
-        for (uint8_t i = 0; i < len; i++)
-        {
-            if (x + 8 > i2c_ssd1306->width)
-            {
-                ESP_LOGW(SSD1306_TAG, "Text exceeds the width of the display");
-                return ESP_OK;
-            }
-            for (uint8_t j = 0; j < 8; j++)
-            {
-                if (invert)
-                {
-                    i2c_ssd1306->page[page].segment[x + j] |= ~font8x8[(uint8_t)text[i]][j] << y_offset;
-                    i2c_ssd1306->page[page + 1].segment[x + j] |= ~font8x8[(uint8_t)text[i]][j] >> (8 - y_offset);
-                }
-                else
-                {
-                    i2c_ssd1306->page[page].segment[x + j] |= font8x8[(uint8_t)text[i]][j] << y_offset;
-                    i2c_ssd1306->page[page + 1].segment[x + j] |= font8x8[(uint8_t)text[i]][j] >> (8 - y_offset);
-                }
-            }
-            x += 8;
-        }
+        x += 8;
     }
 
     return ESP_OK;
@@ -242,46 +285,56 @@ esp_err_t i2c_ssd1306_buffer_float(i2c_ssd1306_handle_t *i2c_ssd1306, uint8_t x,
     return i2c_ssd1306_buffer_text(i2c_ssd1306, x, y, text, invert);
 }
 
-esp_err_t i2c_ssd1306_buffer_image(i2c_ssd1306_handle_t *i2c_ssd1306, uint8_t x, uint8_t y, const uint8_t *image, uint8_t width, uint8_t height, bool invert)
+esp_err_t i2c_ssd1306_buffer_image(i2c_ssd1306_handle_t *i2c_ssd1306, uint8_t x, uint8_t y, const uint8_t *image, uint8_t img_width, uint8_t img_height, bool invert)
 {
-    if (x >= i2c_ssd1306->width || y >= i2c_ssd1306->height || width > i2c_ssd1306->width || height > i2c_ssd1306->height || x + width > i2c_ssd1306->width || y + height > i2c_ssd1306->height)
+    if (image == NULL || img_width == 0 || img_height == 0 || x >= i2c_ssd1306->width || y >= i2c_ssd1306->height)
     {
-        ESP_LOGE(SSD1306_TAG, "Invalid image coordinates, 'x' must be between 0 and %d, 'y' must be between 0 and %d, 'width' must be between 1 and %d, 'height' must be between 1 and %d, 'x + width' must be less than or equal to %d, 'y + height' must be less than or equal to %d", i2c_ssd1306->width - 1, i2c_ssd1306->height - 1, i2c_ssd1306->width, i2c_ssd1306->height, i2c_ssd1306->width, i2c_ssd1306->height);
+        ESP_LOGE(SSD1306_TAG, "Invalid image or coordinates: x=%d (max %d), y=%d (max %d)", x, i2c_ssd1306->width - 1, y, i2c_ssd1306->height - 1);
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t initial_page = y / 8;
-    uint8_t final_page = (y + height - 1) / 8;
-    uint8_t page_range = final_page - initial_page;
-    uint8_t y_offset = y % 8;
-    if (y_offset == 0)
+    uint8_t draw_width = (img_width < (i2c_ssd1306->width - x)) ? img_width : (i2c_ssd1306->width - x);
+    uint8_t draw_height = (img_height < (i2c_ssd1306->height - y)) ? img_height : (i2c_ssd1306->height - y);
+
+    uint8_t start_page = y / 8;
+    uint8_t vertical_offset = y % 8;
+    uint8_t num_pages = i2c_ssd1306->total_pages;
+    uint8_t draw_pages = (((draw_height + 7) / 8) < (num_pages - start_page)) ? ((draw_height + 7) / 8) : (num_pages - start_page);
+
+    if (img_height > draw_height)
     {
-        for (uint8_t i = 0; i <= page_range; i++)
-        {
-            for (uint8_t j = 0; j < width; j++)
-            {
-                if (invert)
-                    i2c_ssd1306->page[initial_page + i].segment[x + j] = ~image[i * width + j];
-                else
-                    i2c_ssd1306->page[initial_page + i].segment[x + j] = image[i * width + j];
-            }
-        }
+        ESP_LOGW(SSD1306_TAG, "Vertical truncation: Lost %d rows", img_height - draw_height);
     }
-    else
+    if (draw_width < img_width)
     {
-        for (uint8_t i = 0; i < page_range; i++)
+        ESP_LOGW(SSD1306_TAG, "Horizontal truncation: Lost %d columns", img_width - draw_width);
+    }
+
+    for (uint8_t col = 0; col < draw_width; col++)
+    {
+        for (uint8_t page = 0; page < draw_pages; page++)
         {
-            for (uint8_t j = 0; j < width; j++)
+            uint8_t target_page = start_page + page;
+            if (target_page >= num_pages)
+                break;
+
+            uint8_t img_byte = image[page * img_width + col];
+            if (invert)
+                img_byte = ~img_byte;
+
+            if (vertical_offset == 0)
             {
-                if (invert)
+                i2c_ssd1306->page[target_page].segment[x + col] |= img_byte;
+            }
+            else
+            {
+                uint8_t lower = img_byte << vertical_offset;
+                uint8_t upper = img_byte >> (8 - vertical_offset);
+
+                i2c_ssd1306->page[target_page].segment[x + col] |= lower;
+                if (target_page + 1 < num_pages)
                 {
-                    i2c_ssd1306->page[initial_page + i].segment[x + j] |= (~image[i * width + j] << y_offset) & (0xFF << y_offset);
-                    i2c_ssd1306->page[initial_page + i + 1].segment[x + j] |= (~image[i * width + j] >> (8 - y_offset)) & (0xFF >> (8 - y_offset));
-                }
-                else
-                {
-                    i2c_ssd1306->page[initial_page + i].segment[x + j] |= (image[i * width + j] << y_offset) & (0xFF << y_offset);
-                    i2c_ssd1306->page[initial_page + i + 1].segment[x + j] |= (image[i * width + j] >> (8 - y_offset)) & (0xFF >> (8 - y_offset));
+                    i2c_ssd1306->page[target_page + 1].segment[x + col] |= upper;
                 }
             }
         }

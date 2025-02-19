@@ -77,6 +77,17 @@ typedef struct
 esp_err_t i2c_ssd1306_init(i2c_master_bus_handle_t i2c_master_bus, i2c_ssd1306_config_t i2c_ssd1306_config, i2c_ssd1306_handle_t *i2c_ssd1306);
 
 /**
+ * @brief Deinitialize the I2C SSD1306 display.
+ *
+ * Frees the memory allocated for the SSD1306 display handle.
+ *
+ * @param i2c_ssd1306 Pointer to the SSD1306 handle.
+ *
+ * @return ESP_OK on success, or an error code otherwise.
+ */
+esp_err_t i2c_ssd1306_deinit(i2c_ssd1306_handle_t *i2c_ssd1306);
+
+/**
  * @brief Display the contents of the SSD1306 buffer.
  *
  * Prints the hexadecimal values of each segment in every page of the SSD1306 buffer
